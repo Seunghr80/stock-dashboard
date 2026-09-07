@@ -98,7 +98,7 @@ def calculate_technical_indicators(df):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     ind_df['ATR'] = tr.rolling(window=14).mean()
 
-    # 9. Parabolic SAR (트렌드 추적)
+    # 9. Parabolic SAR
     highs = ind_df['High'].values
     lows = ind_df['Low'].values
     closes = ind_df['Close'].values
@@ -146,7 +146,6 @@ def build_signal_row(ind_df, idx_pos):
         return {}, np.nan, np.nan, np.nan
 
     curr = ind_df.iloc[idx_pos]
-
     signals = {}
 
     # 1. RSI
@@ -245,7 +244,7 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트 (상승/하락 예상 시점 마커 예측 기능 반영)
+# 3. 대화형 차트 (마우스 스크롤 줌 및 드래그 팬 활성화)
 # -----------------------------------------------------------------------------
 def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=None, show_signals=True):
     if df.empty:
@@ -283,26 +282,22 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
             row=1, col=1, secondary_y=False
         )
 
-    # 과거 패턴 기반 상승/하락 가능 시점 예측 마커 추가
+    # 과거 패턴 기반 상승/하락 예상 시점 예측 마커
     if show_signals:
         buy_x, buy_y = [], []
         sell_x, sell_y = [], []
 
         for i in range(1, len(df)):
-            # 조건 1: MACD 골든크로스 / 데드크로스
             macd_gold = (df['MACD'].iloc[i - 1] < df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] >= df['MACD_Signal'].iloc[i])
             macd_dead = (df['MACD'].iloc[i - 1] > df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] <= df['MACD_Signal'].iloc[i])
 
-            # 조건 2: RSI 반등 / 과열 하락
             rsi_buy = (df['RSI'].iloc[i - 1] <= 35) and (df['RSI'].iloc[i] > 35)
             rsi_sell = (df['RSI'].iloc[i - 1] >= 65) and (df['RSI'].iloc[i] < 65)
 
-            # 상승 가능 시점 (매수 예측)
             if macd_gold or rsi_buy:
                 buy_x.append(df.index[i])
                 buy_y.append(df['Low'].iloc[i] * 0.985)
 
-            # 하락 가능 시점 (매도 예측)
             if macd_dead or rsi_sell:
                 sell_x.append(df.index[i])
                 sell_y.append(df['High'].iloc[i] * 1.015)
@@ -381,14 +376,16 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
             row=3, col=1
         )
 
+    # 마우스 줌/팬 인터랙션 강화 설정
     fig.update_layout(
-        title=f"📊 {ticker_symbol} 기술적 분석 및 추세 예측 차트",
+        title=f"📊 {ticker_symbol} 기술적 분석 및 추세 예측 차트 (마우스 스크롤 확대/축소 가능)",
         height=800,
         margin=dict(l=10, r=10, t=50, b=10),
         template="plotly_dark",
         paper_bgcolor="#131722",
         plot_bgcolor="#131722",
         hovermode="x unified",
+        dragmode="pan",  # 기본 드래그 동작을 이동(Pan)으로 설정
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
@@ -479,7 +476,13 @@ def main():
             chart_fig = create_interactive_chart(
                 ind_df, current_ticker, target_price=target_p, stop_loss=stop_l, show_signals=toggle_signals
             )
-            st.plotly_chart(chart_fig, use_container_width=True)
+
+            # config 옵션에 scrollZoom=True를 추가하여 마우스 휠 확대를 활성화
+            st.plotly_chart(
+                chart_fig,
+                use_container_width=True,
+                config={"scrollZoom": True, "displayModeBar": True}
+            )
 
     # TAB 2: 8대 상세 지표 매수/매도 분석
     with main_tab2:
