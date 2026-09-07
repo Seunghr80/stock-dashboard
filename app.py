@@ -98,7 +98,7 @@ def calculate_technical_indicators(df):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     ind_df['ATR'] = tr.rolling(window=14).mean()
 
-    # 9. Parabolic SAR (정교한 트렌드 추적)
+    # 9. Parabolic SAR (트렌드 추적)
     highs = ind_df['High'].values
     lows = ind_df['Low'].values
     closes = ind_df['Close'].values
@@ -106,7 +106,6 @@ def calculate_technical_indicators(df):
     af = 0.02
     max_af = 0.2
     bull = True
-    ep = lows[0]
     hp = highs[0]
     lp = lows[0]
 
@@ -147,20 +146,19 @@ def build_signal_row(ind_df, idx_pos):
         return {}, np.nan, np.nan, np.nan
 
     curr = ind_df.iloc[idx_pos]
-    prev = ind_df.iloc[idx_pos - 1]
 
     signals = {}
 
-    # 1. RSI (추세 및 구간 판정 반영)
+    # 1. RSI
     if not pd.isna(curr['RSI']):
         if curr['RSI'] <= 40:
-            signals['RSI'] = 1  # 매수 우위
+            signals['RSI'] = 1
         elif curr['RSI'] >= 60:
-            signals['RSI'] = -1 # 매도 우위
+            signals['RSI'] = -1
         else:
             signals['RSI'] = 0
 
-    # 2. MACD (히스토그램 및 양/음 전환 판정)
+    # 2. MACD
     if not (pd.isna(curr['MACD']) or pd.isna(curr['MACD_Signal'])):
         if curr['MACD'] > curr['MACD_Signal']:
             signals['MACD'] = 1
@@ -169,7 +167,7 @@ def build_signal_row(ind_df, idx_pos):
         else:
             signals['MACD'] = 0
 
-    # 3. SMA Cross (이평선 정배열/역배열 판정)
+    # 3. SMA Cross
     if not (pd.isna(curr['SMA20']) or pd.isna(curr['SMA60'])):
         if curr['SMA20'] > curr['SMA60']:
             signals['SMA_Cross'] = 1
@@ -178,7 +176,7 @@ def build_signal_row(ind_df, idx_pos):
         else:
             signals['SMA_Cross'] = 0
 
-    # 4. Stochastic (%K와 %D 상대 위치)
+    # 4. Stochastic
     if not (pd.isna(curr['Stoch_K']) or pd.isna(curr['Stoch_D'])):
         if curr['Stoch_K'] > curr['Stoch_D'] and curr['Stoch_K'] < 80:
             signals['Stochastic'] = 1
@@ -187,12 +185,12 @@ def build_signal_row(ind_df, idx_pos):
         else:
             signals['Stochastic'] = 0
 
-    # 5. Bollinger (중앙선 상하 위치)
+    # 5. Bollinger
     if not (pd.isna(curr['BB_Lower']) or pd.isna(curr['BB_Upper']) or pd.isna(curr['SMA20'])):
         if curr['Close'] < curr['SMA20']:
-            signals['Bollinger'] = 1  # 저평가 영역 (매수 관점)
+            signals['Bollinger'] = 1
         elif curr['Close'] > curr['BB_Upper']:
-            signals['Bollinger'] = -1 # 과열 영역
+            signals['Bollinger'] = -1
         else:
             signals['Bollinger'] = 0
 
@@ -214,7 +212,7 @@ def build_signal_row(ind_df, idx_pos):
         else:
             signals['Williams_R'] = 0
 
-    # 8. PSAR (정확한 PSAR과 주가 비교)
+    # 8. PSAR
     if not pd.isna(curr['PSAR']):
         if curr['Close'] > curr['PSAR']:
             signals['PSAR'] = 1
@@ -247,9 +245,9 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트
+# 3. 대화형 차트 (상승/하락 예상 시점 마커 예측 기능 반영)
 # -----------------------------------------------------------------------------
-def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=None):
+def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=None, show_signals=True):
     if df.empty:
         return go.Figure()
 
@@ -284,6 +282,54 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
             go.Scatter(x=df.index, y=df['SMA60'], name="SMA 60", line=dict(color="#ff6d00", width=1.5)),
             row=1, col=1, secondary_y=False
         )
+
+    # 과거 패턴 기반 상승/하락 가능 시점 예측 마커 추가
+    if show_signals:
+        buy_x, buy_y = [], []
+        sell_x, sell_y = [], []
+
+        for i in range(1, len(df)):
+            # 조건 1: MACD 골든크로스 / 데드크로스
+            macd_gold = (df['MACD'].iloc[i - 1] < df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] >= df['MACD_Signal'].iloc[i])
+            macd_dead = (df['MACD'].iloc[i - 1] > df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] <= df['MACD_Signal'].iloc[i])
+
+            # 조건 2: RSI 반등 / 과열 하락
+            rsi_buy = (df['RSI'].iloc[i - 1] <= 35) and (df['RSI'].iloc[i] > 35)
+            rsi_sell = (df['RSI'].iloc[i - 1] >= 65) and (df['RSI'].iloc[i] < 65)
+
+            # 상승 가능 시점 (매수 예측)
+            if macd_gold or rsi_buy:
+                buy_x.append(df.index[i])
+                buy_y.append(df['Low'].iloc[i] * 0.985)
+
+            # 하락 가능 시점 (매도 예측)
+            if macd_dead or rsi_sell:
+                sell_x.append(df.index[i])
+                sell_y.append(df['High'].iloc[i] * 1.015)
+
+        if buy_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=buy_x, y=buy_y,
+                    mode="markers",
+                    name="상승예상 (▲)",
+                    marker=dict(symbol="triangle-up", size=10, color="#00e676"),
+                    showlegend=True
+                ),
+                row=1, col=1
+            )
+
+        if sell_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=sell_x, y=sell_y,
+                    mode="markers",
+                    name="하락예상 (▼)",
+                    marker=dict(symbol="triangle-down", size=10, color="#ff1744"),
+                    showlegend=True
+                ),
+                row=1, col=1
+            )
 
     # 거래량
     if 'Volume' in df.columns:
@@ -336,7 +382,7 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
         )
 
     fig.update_layout(
-        title=f"📊 {ticker_symbol} 기술적 분석 차트",
+        title=f"📊 {ticker_symbol} 기술적 분석 및 추세 예측 차트",
         height=800,
         margin=dict(l=10, r=10, t=50, b=10),
         template="plotly_dark",
@@ -396,13 +442,15 @@ def main():
         index=2
     )
 
+    toggle_signals = st.sidebar.toggle("상승/하락 예상 시점 마커 표시", value=True)
+
     current_ticker = st.session_state.active_ticker
     is_krx = current_ticker.endswith(".KS") or current_ticker.endswith(".KQ")
 
     raw_df, ind_df = get_indicator_series(current_ticker, period=selected_period)
 
     main_tab1, main_tab2, main_tab3 = st.tabs([
-        "📊 대화형 차트 & 목표가/손절가",
+        "📊 대화형 차트 & 추세 예측",
         "⚙️ 8대 지표별 매수/매도 신호",
         "🔍 멀티 종목 스캐너"
     ])
@@ -429,7 +477,7 @@ def main():
             col5.metric("CCI (20)", f"{latest['CCI']:.1f}" if not pd.isna(latest['CCI']) else "-")
 
             chart_fig = create_interactive_chart(
-                ind_df, current_ticker, target_price=target_p, stop_loss=stop_l
+                ind_df, current_ticker, target_price=target_p, stop_loss=stop_l, show_signals=toggle_signals
             )
             st.plotly_chart(chart_fig, use_container_width=True)
 
