@@ -201,7 +201,7 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트 (적절한 초기 가로 간격 70개 봉 설정)
+# 3. 대화형 차트 (X축 가로 간격 + Y축 세로 자동 스케일링 완벽 적용)
 # -----------------------------------------------------------------------------
 def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True, cooldown_bars=4, marker_size=7, visible_bars=70):
     if df.empty:
@@ -256,12 +256,12 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
 
             if (macd_gold or rsi_buy) and (i - last_buy_idx >= cooldown_bars):
                 buy_x.append(df.index[i])
-                buy_y.append(df['Low'].iloc[i] * 0.98)
+                buy_y.append(df['Low'].iloc[i] * 0.99)
                 last_buy_idx = i
 
             if (macd_dead or rsi_sell) and (i - last_sell_idx >= cooldown_bars):
                 sell_x.append(df.index[i])
-                sell_y.append(df['High'].iloc[i] * 1.02)
+                sell_y.append(df['High'].iloc[i] * 1.01)
                 last_sell_idx = i
 
         if buy_x:
@@ -338,13 +338,36 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=3, col=1
         )
 
-    # 가로축(X축) 범위 설정: 적당히 적절한 70개 봉 기준으로 표시
+    # 📌 [가로축/세로축 동적 스케일링 핵심 부분]
     if len(df) > visible_bars:
-        x_min = df.index[-visible_bars]
-        x_max = df.index[-1]
+        visible_df = df.iloc[-visible_bars:]
+        x_min = visible_df.index[0]
+        x_max = visible_df.index[-1]
     else:
+        visible_df = df
         x_min = df.index[0]
         x_max = df.index[-1]
+
+    # 현재 화면 봉들의 최저가/최고가 기준으로 Y축 범위 계산 (세로 확장)
+    y_min = visible_df['Low'].min()
+    y_max = visible_df['High'].max()
+    
+    # 60일 이평선이나 20일 이평선이 화면 안에서 잘리지 않도록 고려
+    if 'SMA20' in visible_df.columns:
+        sma_min = visible_df['SMA20'].min()
+        sma_max = visible_df['SMA20'].max()
+        if not pd.isna(sma_min): y_min = min(y_min, sma_min)
+        if not pd.isna(sma_max): y_max = max(y_max, sma_max)
+        
+    if 'SMA60' in visible_df.columns:
+        sma_min = visible_df['SMA60'].min()
+        sma_max = visible_df['SMA60'].max()
+        if not pd.isna(sma_min): y_min = min(y_min, sma_min)
+        if not pd.isna(sma_max): y_max = max(y_max, sma_max)
+
+    # 상하 3% 여백 부여
+    y_padding = (y_max - y_min) * 0.03 if (y_max - y_min) > 0 else y_min * 0.03
+    y_range = [y_min - y_padding, y_max + y_padding]
 
     fig.update_layout(
         title=f"📊 {ticker_symbol} ({interval_label}) 기술적 분석 차트",
@@ -368,7 +391,8 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         type="date"
     )
 
-    fig.update_yaxes(gridcolor="#2a2e39", zerolinecolor="#2a2e39", fixedrange=False, row=1, col=1)
+    # Y축 범위를 화면에 보이는 최저/최고가에 맞춰 꽉 채움
+    fig.update_yaxes(gridcolor="#2a2e39", zerolinecolor="#2a2e39", range=y_range, fixedrange=False, row=1, col=1)
     fig.update_yaxes(showgrid=False, secondary_y=True, row=1, col=1)
     fig.update_yaxes(gridcolor="#2a2e39", range=[0, 100], row=2, col=1)
     fig.update_yaxes(gridcolor="#2a2e39", row=3, col=1)
@@ -411,7 +435,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("📐 차트 가시성 & 시그널 설정")
     
-    # 적절한 가로 간격을 맞출 수 있도록 기본값 70 설정 (30~120 조절 범위)
+    # 적절한 가로 간격을 맞출 수 있도록 기본값 70 설정
     visible_bars_val = st.sidebar.slider("한 화면에 볼 봉 개수 (가로 간격)", min_value=30, max_value=120, value=70, step=5)
     
     toggle_signals = st.sidebar.toggle("상승/하락 마커 표시", value=True)
