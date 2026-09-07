@@ -421,6 +421,21 @@ if "analyzed" not in st.session_state:
     st.session_state.analyzed = False
 if "ticker" not in st.session_state:
     st.session_state.ticker = "TSLA"
+if "recent_tickers" not in st.session_state:
+    st.session_state.recent_tickers = []
+ 
+ 
+def _set_active_ticker(t):
+    t = t.strip().upper()
+    if not t:
+        return
+    st.session_state.ticker = t
+    st.session_state.analyzed = True
+    # 최근 검색 목록 갱신: 중복 제거 후 맨 앞에 추가, 최대 8개 유지
+    recents = [r for r in st.session_state.recent_tickers if r != t]
+    recents.insert(0, t)
+    st.session_state.recent_tickers = recents[:8]
+ 
  
 col_input, col_btn = st.columns([4, 1])
 with col_input:
@@ -429,8 +444,16 @@ with col_btn:
     st.write(" ")
     st.write(" ")
     if st.button("타점 분석 및 검증 개시", use_container_width=True):
-        st.session_state.analyzed = True
-        st.session_state.ticker = input_ticker.strip().upper()
+        _set_active_ticker(input_ticker)
+ 
+if st.session_state.recent_tickers:
+    st.caption("최근 검색")
+    recent_cols = st.columns(len(st.session_state.recent_tickers))
+    for col, t in zip(recent_cols, st.session_state.recent_tickers):
+        with col:
+            if st.button(t, key=f"recent_{t}", use_container_width=True):
+                _set_active_ticker(t)
+                st.rerun()
  
 if st.session_state.analyzed:
     ticker = st.session_state.ticker
