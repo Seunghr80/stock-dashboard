@@ -261,7 +261,7 @@ def build_signal_row(ind, i):
 # ---------------------------------------------------------
 # 5. 시각화 모듈
 # ---------------------------------------------------------
-def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals_dates=None):
+def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals_dates=None, is_krw=False):
     buy_signals_dates = buy_signals_dates or []
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03
@@ -287,10 +287,24 @@ def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals
                 textfont=dict(color="#2ecc71", size=10),
             ), row=1, col=1)
  
+    # add_hline은 배경 도형이라 마우스를 올려도 값이 안 뜨므로, 호버 툴팁이 뜨도록
+    # 실제 데이터 트레이스(가로선)로 그린다.
     if target_price is not None and not np.isnan(target_price):
-        fig.add_hline(y=target_price, line_dash="dash", line_color="green", annotation_text="목표가(ATR)", row=1, col=1)
+        price_str = format_price(target_price, is_krw)
+        fig.add_trace(go.Scatter(
+            x=[df.index.min(), df.index.max()], y=[target_price, target_price],
+            mode="lines", line=dict(color="green", dash="dash", width=1.5),
+            name=f"목표가(ATR) {price_str}",
+            hovertemplate=f"목표가(ATR): {price_str}<extra></extra>",
+        ), row=1, col=1)
     if stop_price is not None and not np.isnan(stop_price):
-        fig.add_hline(y=stop_price, line_dash="dash", line_color="red", annotation_text="손절가(ATR)", row=1, col=1)
+        price_str = format_price(stop_price, is_krw)
+        fig.add_trace(go.Scatter(
+            x=[df.index.min(), df.index.max()], y=[stop_price, stop_price],
+            mode="lines", line=dict(color="red", dash="dash", width=1.5),
+            name=f"손절가(ATR) {price_str}",
+            hovertemplate=f"손절가(ATR): {price_str}<extra></extra>",
+        ), row=1, col=1)
  
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="거래량", marker_color="gray"), row=2, col=1)
  
@@ -555,7 +569,7 @@ if st.session_state.analyzed:
  
                 st.write("---")
                 st.subheader("📊 차트 및 지표 현황")
-                st.plotly_chart(create_interactive_chart(df, target_price, stop_price, buy_signals_dates), use_container_width=True)
+                st.plotly_chart(create_interactive_chart(df, target_price, stop_price, buy_signals_dates, is_krw), use_container_width=True)
                 st.plotly_chart(create_indicator_status_chart(signals), use_container_width=True)
  
             with main_tab3:
