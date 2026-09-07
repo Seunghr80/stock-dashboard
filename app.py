@@ -261,10 +261,11 @@ def build_signal_row(ind, i):
 # ---------------------------------------------------------
 # 5. 시각화 모듈
 # ---------------------------------------------------------
-def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals_dates=None, is_krw=False):
+def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals_dates=None,
+                              is_krw=False, rsi_series=None, y_zoom_pct=100):
     buy_signals_dates = buy_signals_dates or []
     fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03
+        rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.15, 0.30], vertical_spacing=0.03,
     )
  
     fig.add_trace(go.Candlestick(
@@ -287,12 +288,12 @@ def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals
                 textfont=dict(color="#2ecc71", size=10),
             ), row=1, col=1)
  
-    # add_hline은 배경 도형이라 마우스를 올려도 값이 안 뜨므로, 호버 툴팁이 뜨도록
-    # 실제 데이터 트레이스(가로선)로 그린다.
+    # 날짜마다 점을 채운 선으로 그려야 선 위 아무 지점에 마우스를 올려도 호버가 뜬다
+    # (시작점·끝점 2개짜리 선은 그 두 점 근처에서만 호버가 인식됨).
     if target_price is not None and not np.isnan(target_price):
         price_str = format_price(target_price, is_krw)
         fig.add_trace(go.Scatter(
-            x=[df.index.min(), df.index.max()], y=[target_price, target_price],
+            x=df.index, y=[target_price] * len(df.index),
             mode="lines", line=dict(color="green", dash="dash", width=1.5),
             name=f"목표가(ATR) {price_str}",
             hovertemplate=f"목표가(ATR): {price_str}<extra></extra>",
@@ -300,7 +301,7 @@ def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals
     if stop_price is not None and not np.isnan(stop_price):
         price_str = format_price(stop_price, is_krw)
         fig.add_trace(go.Scatter(
-            x=[df.index.min(), df.index.max()], y=[stop_price, stop_price],
+            x=df.index, y=[stop_price] * len(df.index),
             mode="lines", line=dict(color="red", dash="dash", width=1.5),
             name=f"손절가(ATR) {price_str}",
             hovertemplate=f"손절가(ATR): {price_str}<extra></extra>",
@@ -308,9 +309,33 @@ def create_interactive_chart(df, target_price=None, stop_price=None, buy_signals
  
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="거래량", marker_color="gray"), row=2, col=1)
  
+    # RSI 서브차트 (30/50/80 기준선)
+    if rsi_series is not None:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=rsi_series, name="RSI(14)", line=dict(color="#8e44ad", width=1.5),
+            hovertemplate="RSI: %{y:.1f}<extra></extra>",
+        ), row=3, col=1)
+        for level, color in [(30, "#e74c3c"), (50, "#95a5a6"), (80, "#2ecc71")]:
+            fig.add_hline(
+                y=level, line_dash="dot", line_color=color, line_width=1,
+                annotation_text=str(level), annotation_position="right",
+                row=3, col=1,
+            )
+        fig.update_yaxes(range=[0, 100], row=3, col=1, title_text="RSI")
+ 
+    # 세로축(가격) 확대/축소: 목표가·손절가 선이 캔들 범위보다 훨씬 멀리 있으면
+    # 자동 범위가 캔들을 납작하게 눌러버리므로, 캔들 가격대를 기준으로 직접 범위를 계산한다.
+    candle_min, candle_max = df["Low"].min(), df["High"].max()
+    center = (candle_min + candle_max) / 2
+    half = max((candle_max - candle_min) / 2, center * 0.01, 1e-9)
+    zoom = max(y_zoom_pct, 10) / 100
+    padded_half = half * zoom * 1.1
+    fig.update_yaxes(range=[center - padded_half, center + padded_half], row=1, col=1)
+ 
     fig.update_layout(
-        height=520, margin=dict(l=10, r=10, t=30, b=10), xaxis_rangeslider_visible=False,
-        template="plotly_white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=680, margin=dict(l=10, r=10, t=30, b=10), xaxis_rangeslider_visible=False,
+        template="plotly_white", hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     return fig
  
@@ -569,7 +594,17 @@ if st.session_state.analyzed:
  
                 st.write("---")
                 st.subheader("📊 차트 및 지표 현황")
-                st.plotly_chart(create_interactive_chart(df, target_price, stop_price, buy_signals_dates, is_krw), use_container_width=True)
+                y_zoom_pct = st.slider(
+                    "차트 세로축 확대/축소", min_value=20, max_value=300, value=100, step=5,
+                    help="숫자가 작을수록 캔들 가격대에 맞춰 확대되고, 클수록 넓은 범위로 축소됩니다.",
+                )
+                st.plotly_chart(
+                    create_interactive_chart(
+                        df, target_price, stop_price, buy_signals_dates, is_krw,
+                        rsi_series=ind["rsi"], y_zoom_pct=y_zoom_pct,
+                    ),
+                    use_container_width=True,
+                )
                 st.plotly_chart(create_indicator_status_chart(signals), use_container_width=True)
  
             with main_tab3:
