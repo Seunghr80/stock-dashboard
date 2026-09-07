@@ -47,7 +47,7 @@ def fetch_stock_data(ticker_symbol, interval="1d", period="1y"):
 
 
 def calculate_technical_indicators(df):
-    """8가지 주요 기술적 지표 정상 계산"""
+    """8가지 주요 기술적 지표 계산"""
     if df.empty or len(df) < MIN_ROWS_REQUIRED:
         return pd.DataFrame()
 
@@ -91,7 +91,7 @@ def calculate_technical_indicators(df):
     # 7. Williams %R (14)
     ind_df['Williams_R'] = ((high14 - ind_df['Close']) / (high14 - low14).replace(0, np.nan)) * -100
 
-    # 8. ATR (변동성 계산용)
+    # 8. ATR (변동성)
     tr1 = ind_df['High'] - ind_df['Low']
     tr2 = (ind_df['High'] - ind_df['Close'].shift(1)).abs()
     tr3 = (ind_df['Low'] - ind_df['Close'].shift(1)).abs()
@@ -141,7 +141,7 @@ def calculate_technical_indicators(df):
 
 
 def build_signal_row(ind_df, idx_pos):
-    """현실적인 구간 및 추세 기반 8대 지표 신호 판정"""
+    """지표별 매수/매도 판정"""
     if idx_pos < 1 or idx_pos >= len(ind_df):
         return {}, np.nan, np.nan, np.nan
 
@@ -201,17 +201,17 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트 (시그널 겹침 방지 및 마커 스케일 최적화 반영)
+# 3. 대화형 차트 (가로축 넓게 펼침 및 초기 표시 범위 조정 반영)
 # -----------------------------------------------------------------------------
-def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True, cooldown_bars=3, marker_size=7):
+def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True, cooldown_bars=4, marker_size=7, visible_bars=45):
     if df.empty:
         return go.Figure()
 
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.6, 0.2, 0.2],
+        vertical_spacing=0.03,
+        row_heights=[0.65, 0.175, 0.175],
         specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
     )
 
@@ -239,7 +239,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=1, col=1, secondary_y=False
         )
 
-    # 마커 중복 방지 로직 (Cooldown 적용)
+    # 중복 시그널 방지 로직
     if show_signals:
         buy_x, buy_y = [], []
         sell_x, sell_y = [], []
@@ -248,24 +248,20 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         last_sell_idx = -cooldown_bars
 
         for i in range(1, len(df)):
-            # MACD 크로스
             macd_gold = (df['MACD'].iloc[i - 1] < df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] >= df['MACD_Signal'].iloc[i])
             macd_dead = (df['MACD'].iloc[i - 1] > df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] <= df['MACD_Signal'].iloc[i])
 
-            # RSI 반등/하락
             rsi_buy = (df['RSI'].iloc[i - 1] <= 30) and (df['RSI'].iloc[i] > 30)
             rsi_sell = (df['RSI'].iloc[i - 1] >= 70) and (df['RSI'].iloc[i] < 70)
 
-            # 매수 시그널 필터링
             if (macd_gold or rsi_buy) and (i - last_buy_idx >= cooldown_bars):
                 buy_x.append(df.index[i])
-                buy_y.append(df['Low'].iloc[i] * 0.975)  # 캔들과 여유 간격 확보
+                buy_y.append(df['Low'].iloc[i] * 0.98)
                 last_buy_idx = i
 
-            # 매도 시그널 필터링
             if (macd_dead or rsi_sell) and (i - last_sell_idx >= cooldown_bars):
                 sell_x.append(df.index[i])
-                sell_y.append(df['High'].iloc[i] * 1.025)  # 캔들과 여유 간격 확보
+                sell_y.append(df['High'].iloc[i] * 1.02)
                 last_sell_idx = i
 
         if buy_x:
@@ -342,9 +338,17 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=3, col=1
         )
 
+    # 가로축(X축) 확대 범위 자동 지정: 최근 N개 봉만 가로로 크게 펼쳐서 보여줌
+    if len(df) > visible_bars:
+        x_min = df.index[-visible_bars]
+        x_max = df.index[-1]
+    else:
+        x_min = df.index[0]
+        x_max = df.index[-1]
+
     fig.update_layout(
         title=f"📊 {ticker_symbol} ({interval_label}) 기술적 분석 차트",
-        height=800,
+        height=950,  # 세로 크기 확충
         margin=dict(l=10, r=10, t=50, b=10),
         template="plotly_dark",
         paper_bgcolor="#131722",
@@ -354,22 +358,14 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
+    # X축 간격 및 스크롤 설정
     fig.update_xaxes(
         gridcolor="#2a2e39",
         zerolinecolor="#2a2e39",
+        range=[x_min, x_max],  # 초기 가로 표시 범위 설정 (자동 넓힘)
         rangeslider_visible=True,
         rangeslider_thickness=0.05,
-        rangeselector=dict(
-            buttons=list([
-                dict(count=1, label="1개월", step="month", stepmode="backward"),
-                dict(count=3, label="3개월", step="month", stepmode="backward"),
-                dict(count=6, label="6개월", step="month", stepmode="backward"),
-                dict(count=1, label="YTD", step="year", stepmode="todate"),
-                dict(step="all", label="전체")
-            ]),
-            bgcolor="#2a2e39", activecolor="#26a69a",
-            font=dict(color="#ffffff", size=11), x=0, y=1.12
-        )
+        type="date"
     )
 
     fig.update_yaxes(gridcolor="#2a2e39", zerolinecolor="#2a2e39", fixedrange=False, row=1, col=1)
@@ -413,11 +409,13 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🎯 마커 시그널 설정")
-    toggle_signals = st.sidebar.toggle("상승/하락 마커 표시", value=True)
+    st.sidebar.subheader("📐 차트 가시성 & 시그널 설정")
     
-    # 중복 시그널 방지용 쿨다운 및 마커 크기 슬라이더
-    cooldown_val = st.sidebar.slider("시그널 발생 최소 간격 (봉 개수)", min_value=1, max_value=10, value=4)
+    # 한 번에 보여줄 봉 개수 지정 슬라이더 (가로 간격 조절용)
+    visible_bars_val = st.sidebar.slider("한 화면에 볼 봉 개수 (가로 간격)", min_value=15, max_value=120, value=40, step=5)
+    
+    toggle_signals = st.sidebar.toggle("상승/하락 마커 표시", value=True)
+    cooldown_val = st.sidebar.slider("시그널 발생 최소 간격 (봉 개수)", min_value=1, max_value=15, value=5)
     marker_size_val = st.sidebar.slider("마커 크기", min_value=4, max_value=12, value=7)
 
     current_ticker = st.session_state.active_ticker
@@ -460,7 +458,8 @@ def main():
                 stop_loss=stop_l, 
                 show_signals=toggle_signals,
                 cooldown_bars=cooldown_val,
-                marker_size=marker_size_val
+                marker_size=marker_size_val,
+                visible_bars=visible_bars_val
             )
 
             st.plotly_chart(
