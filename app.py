@@ -540,20 +540,18 @@ if st.session_state.analyzed:
                 with msg_col:
                     if buy_ratio >= 70:
                         st.success(f"🟢 **강한 매수 우위** ({buy_ratio:.0f}%) — 주요 지표들이 일치된 상방을 나타냅니다.")
-                        st.markdown(
-                            f"- **진입가대:** 현재가 부근 ({fmt(current_price)})\n"
-                            f"- **목표가 (ATR×2):** {fmt(target_price)}\n"
-                            f"- **손절가 (ATR×1.2):** {fmt(stop_price)}"
-                        )
                     elif sell_ratio >= 70:
-                        st.error(f"🔴 **강한 매도 우위** ({sell_ratio:.0f}%) — 하방 압력이 높습니다.")
-                        st.markdown(
-                            f"- **대응:** 진입 보류 및 비중 축소 권장\n"
-                            f"- **지지선 (ATR×2):** {fmt(support_price)}"
-                        )
+                        st.error(f"🔴 **강한 매도 우위** ({sell_ratio:.0f}%) — 하방 압력이 높습니다. 진입 보류 및 비중 축소를 권장합니다.")
                     else:
                         st.warning(f"🟡 **관망 구간** (매수 {buy_ratio:.0f}%, 매도 {sell_ratio:.0f}%)")
                         st.info("💡 뚜렷한 추세가 나타날 때까지 대기하는 것이 안전합니다.")
+ 
+                    st.markdown(
+                        f"**현재가:** {fmt(current_price)} · "
+                        f"**목표가(ATR×2):** {fmt(target_price)} · "
+                        f"**손절가(ATR×1.2):** {fmt(stop_price)} · "
+                        f"**지지선(ATR×2):** {fmt(support_price)}"
+                    )
  
                 st.write("---")
                 st.subheader("📊 차트 및 지표 현황")
