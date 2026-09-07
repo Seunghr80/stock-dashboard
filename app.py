@@ -17,7 +17,6 @@ st.set_page_config(
 
 MIN_ROWS_REQUIRED = 30
 
-# 복원된 8개 지표 가중치
 INDICATOR_WEIGHTS = {
     "RSI": 1.5,
     "MACD": 1.5,
@@ -30,7 +29,7 @@ INDICATOR_WEIGHTS = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 수집 및 기술적 지표 8종 계산 함수
+# 2. 데이터 수집 및 정교한 지표 계산
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_stock_data(ticker_symbol, period="1y"):
@@ -48,7 +47,7 @@ def fetch_stock_data(ticker_symbol, period="1y"):
 
 
 def calculate_technical_indicators(df):
-    """8가지 주요 기술적 지표 계산"""
+    """8가지 주요 기술적 지표 정상 계산"""
     if df.empty or len(df) < MIN_ROWS_REQUIRED:
         return pd.DataFrame()
 
@@ -83,7 +82,7 @@ def calculate_technical_indicators(df):
     ind_df['BB_Upper'] = ind_df['SMA20'] + (std20 * 2)
     ind_df['BB_Lower'] = ind_df['SMA20'] - (std20 * 2)
 
-    # 6. CCI (Commodity Channel Index - 20)
+    # 6. CCI (20)
     tp = (ind_df['High'] + ind_df['Low'] + ind_df['Close']) / 3
     sma_tp = tp.rolling(window=20).mean()
     mad = tp.rolling(window=20).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
@@ -92,21 +91,58 @@ def calculate_technical_indicators(df):
     # 7. Williams %R (14)
     ind_df['Williams_R'] = ((high14 - ind_df['Close']) / (high14 - low14).replace(0, np.nan)) * -100
 
-    # 8. ATR (Average True Range - 목표가/손절가 산출용)
+    # 8. ATR (변동성 계산용)
     tr1 = ind_df['High'] - ind_df['Low']
     tr2 = (ind_df['High'] - ind_df['Close'].shift(1)).abs()
     tr3 = (ind_df['Low'] - ind_df['Close'].shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     ind_df['ATR'] = tr.rolling(window=14).mean()
 
-    # 9. Parabolic SAR (간이 산출)
-    ind_df['PSAR'] = ind_df['SMA20']
+    # 9. Parabolic SAR (정교한 트렌드 추적)
+    highs = ind_df['High'].values
+    lows = ind_df['Low'].values
+    closes = ind_df['Close'].values
+    psar = closes.copy()
+    af = 0.02
+    max_af = 0.2
+    bull = True
+    ep = lows[0]
+    hp = highs[0]
+    lp = lows[0]
+
+    for i in range(2, len(closes)):
+        if bull:
+            psar[i] = psar[i - 1] + af * (hp - psar[i - 1])
+            psar[i] = min(psar[i], lows[i - 1], lows[i - 2])
+            if lows[i] < psar[i]:
+                bull = False
+                psar[i] = hp
+                lp = lows[i]
+                af = 0.02
+            else:
+                if highs[i] > hp:
+                    hp = highs[i]
+                    af = min(af + 0.02, max_af)
+        else:
+            psar[i] = psar[i - 1] + af * (lp - psar[i - 1])
+            psar[i] = max(psar[i], highs[i - 1], highs[i - 2])
+            if highs[i] > psar[i]:
+                bull = True
+                psar[i] = lp
+                hp = highs[i]
+                af = 0.02
+            else:
+                if lows[i] < lp:
+                    lp = lows[i]
+                    af = min(af + 0.02, max_af)
+
+    ind_df['PSAR'] = psar
 
     return ind_df
 
 
 def build_signal_row(ind_df, idx_pos):
-    """8가지 지표 종합 매수/매도 신호 판정"""
+    """현실적인 구간 및 추세 기반 8대 지표 신호 판정"""
     if idx_pos < 1 or idx_pos >= len(ind_df):
         return {}, np.nan, np.nan, np.nan
 
@@ -115,57 +151,77 @@ def build_signal_row(ind_df, idx_pos):
 
     signals = {}
 
-    # 1. RSI
+    # 1. RSI (추세 및 구간 판정 반영)
     if not pd.isna(curr['RSI']):
-        signals['RSI'] = 1 if curr['RSI'] <= 30 else (-1 if curr['RSI'] >= 70 else 0)
+        if curr['RSI'] <= 40:
+            signals['RSI'] = 1  # 매수 우위
+        elif curr['RSI'] >= 60:
+            signals['RSI'] = -1 # 매도 우위
+        else:
+            signals['RSI'] = 0
 
-    # 2. MACD
+    # 2. MACD (히스토그램 및 양/음 전환 판정)
     if not (pd.isna(curr['MACD']) or pd.isna(curr['MACD_Signal'])):
-        if prev['MACD'] < prev['MACD_Signal'] and curr['MACD'] >= curr['MACD_Signal']:
+        if curr['MACD'] > curr['MACD_Signal']:
             signals['MACD'] = 1
-        elif prev['MACD'] > prev['MACD_Signal'] and curr['MACD'] <= curr['MACD_Signal']:
+        elif curr['MACD'] < curr['MACD_Signal']:
             signals['MACD'] = -1
         else:
             signals['MACD'] = 0
 
-    # 3. SMA Cross
+    # 3. SMA Cross (이평선 정배열/역배열 판정)
     if not (pd.isna(curr['SMA20']) or pd.isna(curr['SMA60'])):
-        if prev['SMA20'] < prev['SMA60'] and curr['SMA20'] >= curr['SMA60']:
+        if curr['SMA20'] > curr['SMA60']:
             signals['SMA_Cross'] = 1
-        elif prev['SMA20'] > prev['SMA60'] and curr['SMA20'] <= curr['SMA60']:
+        elif curr['SMA20'] < curr['SMA60']:
             signals['SMA_Cross'] = -1
         else:
             signals['SMA_Cross'] = 0
 
-    # 4. Stochastic
+    # 4. Stochastic (%K와 %D 상대 위치)
     if not (pd.isna(curr['Stoch_K']) or pd.isna(curr['Stoch_D'])):
-        if prev['Stoch_K'] < prev['Stoch_D'] and curr['Stoch_K'] >= curr['Stoch_D'] and curr['Stoch_K'] <= 20:
+        if curr['Stoch_K'] > curr['Stoch_D'] and curr['Stoch_K'] < 80:
             signals['Stochastic'] = 1
-        elif prev['Stoch_K'] > prev['Stoch_D'] and curr['Stoch_K'] <= curr['Stoch_D'] and curr['Stoch_K'] >= 80:
+        elif curr['Stoch_K'] < curr['Stoch_D'] and curr['Stoch_K'] > 20:
             signals['Stochastic'] = -1
         else:
             signals['Stochastic'] = 0
 
-    # 5. Bollinger
-    if not (pd.isna(curr['BB_Lower']) or pd.isna(curr['BB_Upper'])):
-        if curr['Close'] <= curr['BB_Lower']:
-            signals['Bollinger'] = 1
-        elif curr['Close'] >= curr['BB_Upper']:
-            signals['Bollinger'] = -1
+    # 5. Bollinger (중앙선 상하 위치)
+    if not (pd.isna(curr['BB_Lower']) or pd.isna(curr['BB_Upper']) or pd.isna(curr['SMA20'])):
+        if curr['Close'] < curr['SMA20']:
+            signals['Bollinger'] = 1  # 저평가 영역 (매수 관점)
+        elif curr['Close'] > curr['BB_Upper']:
+            signals['Bollinger'] = -1 # 과열 영역
         else:
             signals['Bollinger'] = 0
 
-    # 6. CCI (-100 이하 매수, 100 이상 매도)
+    # 6. CCI
     if not pd.isna(curr['CCI']):
-        signals['CCI'] = 1 if curr['CCI'] <= -100 else (-1 if curr['CCI'] >= 100 else 0)
+        if curr['CCI'] < -50:
+            signals['CCI'] = 1
+        elif curr['CCI'] > 50:
+            signals['CCI'] = -1
+        else:
+            signals['CCI'] = 0
 
-    # 7. Williams %R (-80 이하 매수, -20 이상 매도)
+    # 7. Williams %R
     if not pd.isna(curr['Williams_R']):
-        signals['Williams_R'] = 1 if curr['Williams_R'] <= -80 else (-1 if curr['Williams_R'] >= -20 else 0)
+        if curr['Williams_R'] < -50:
+            signals['Williams_R'] = 1
+        elif curr['Williams_R'] > -20:
+            signals['Williams_R'] = -1
+        else:
+            signals['Williams_R'] = 0
 
-    # 8. PSAR
+    # 8. PSAR (정확한 PSAR과 주가 비교)
     if not pd.isna(curr['PSAR']):
-        signals['PSAR'] = 1 if curr['Close'] > curr['PSAR'] else -1
+        if curr['Close'] > curr['PSAR']:
+            signals['PSAR'] = 1
+        elif curr['Close'] < curr['PSAR']:
+            signals['PSAR'] = -1
+        else:
+            signals['PSAR'] = 0
 
     return signals, curr['Close'], curr['SMA20'], curr['SMA60']
 
@@ -191,13 +247,12 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트 (목표가/손절가 및 레이아웃 수정 완료)
+# 3. 대화형 차트
 # -----------------------------------------------------------------------------
 def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=None):
     if df.empty:
         return go.Figure()
 
-    # 레이아웃 간격 정돈 (RSI, MACD 서브플롯 영역 최적화)
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
@@ -206,7 +261,7 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
         specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
     )
 
-    # --- Row 1: 캔들스틱 차트 & 이동평균선 ---
+    # Row 1: 캔들스틱 & 이동평균선
     fig.add_trace(
         go.Candlestick(
             x=df.index,
@@ -241,7 +296,7 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
             row=1, col=1, secondary_y=True
         )
 
-    # --- 목표가 / 손절가 가이드 라인 복원 ---
+    # 목표가 / 손절가
     if target_price:
         fig.add_hline(
             y=target_price, line_dash="dash", line_color="#00e676", line_width=2,
@@ -255,7 +310,7 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
             annotation_position="bottom right", row=1, col=1
         )
 
-    # --- Row 2: RSI 지표 ---
+    # Row 2: RSI
     if 'RSI' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color="#ab47bc", width=1.5)),
@@ -264,7 +319,7 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
         fig.add_hline(y=70, line_dash="dash", line_color="#ef5350", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="#26a69a", row=2, col=1)
 
-    # --- Row 3: MACD 지표 ---
+    # Row 3: MACD
     if 'MACD' in df.columns and 'MACD_Signal' in df.columns and 'MACD_Hist' in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color="#2962ff", width=1.5)),
@@ -280,7 +335,6 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
             row=3, col=1
         )
 
-    # --- 레이아웃 설정 ---
     fig.update_layout(
         title=f"📊 {ticker_symbol} 기술적 분석 차트",
         height=800,
@@ -292,7 +346,6 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    # X축 미니 슬라이더 및 이동 버튼
     fig.update_xaxes(
         gridcolor="#2a2e39",
         zerolinecolor="#2a2e39",
@@ -354,9 +407,7 @@ def main():
         "🔍 멀티 종목 스캐너"
     ])
 
-    # -------------------------------------------------------------------------
-    # TAB 1: 대화형 차트 & 목표가/손절가 라인
-    # -------------------------------------------------------------------------
+    # TAB 1: 대화형 차트
     with main_tab1:
         if ind_df.empty:
             st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다.")
@@ -366,7 +417,6 @@ def main():
             chg = latest['Close'] - prev['Close']
             chg_pct = (chg / prev['Close']) * 100
 
-            # ATR 기반 변동성 목표가/손절가 산출 (목표가: 현재가 + 2*ATR, 손절가: 현재가 - 1.5*ATR)
             atr_val = latest['ATR'] if not pd.isna(latest['ATR']) else latest['Close'] * 0.03
             target_p = latest['Close'] + (atr_val * 2.0)
             stop_l = latest['Close'] - (atr_val * 1.5)
@@ -378,15 +428,12 @@ def main():
             col4.metric("RSI (14)", f"{latest['RSI']:.1f}" if not pd.isna(latest['RSI']) else "-")
             col5.metric("CCI (20)", f"{latest['CCI']:.1f}" if not pd.isna(latest['CCI']) else "-")
 
-            # 차트에 목표가 / 손절가 가이드선 바인딩
             chart_fig = create_interactive_chart(
                 ind_df, current_ticker, target_price=target_p, stop_loss=stop_l
             )
             st.plotly_chart(chart_fig, use_container_width=True)
 
-    # -------------------------------------------------------------------------
     # TAB 2: 8대 상세 지표 매수/매도 분석
-    # -------------------------------------------------------------------------
     with main_tab2:
         if ind_df.empty or len(ind_df) < MIN_ROWS_REQUIRED:
             st.warning("분석에 필요한 충분한 데이터가 없습니다.")
@@ -424,9 +471,7 @@ def main():
 
             st.table(pd.DataFrame(sig_details))
 
-    # -------------------------------------------------------------------------
     # TAB 3: 멀티 스캐너
-    # -------------------------------------------------------------------------
     with main_tab3:
         st.subheader("🔍 관심종목 멀티 스캐너")
         watchlist_input = st.text_area(
