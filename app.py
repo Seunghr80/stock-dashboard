@@ -33,12 +33,8 @@ INDICATOR_WEIGHTS = {
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_stock_data(ticker_symbol, interval="1d", period="1y"):
-    """
-    yfinance 시세 데이터 수집
-    interval: '1d' (일봉), '4h' (4시간봉)
-    """
+    """yfinance 시세 데이터 수집"""
     try:
-        # 4시간 봉의 경우 yfinance 최대 조회 기간은 약 730일(2년)입니다.
         df = yf.download(ticker_symbol, period=period, interval=interval, progress=False)
         if df.empty:
             return pd.DataFrame()
@@ -152,34 +148,15 @@ def build_signal_row(ind_df, idx_pos):
     curr = ind_df.iloc[idx_pos]
     signals = {}
 
-    # 1. RSI
     if not pd.isna(curr['RSI']):
-        if curr['RSI'] <= 40:
-            signals['RSI'] = 1
-        elif curr['RSI'] >= 60:
-            signals['RSI'] = -1
-        else:
-            signals['RSI'] = 0
+        signals['RSI'] = 1 if curr['RSI'] <= 40 else (-1 if curr['RSI'] >= 60 else 0)
 
-    # 2. MACD
     if not (pd.isna(curr['MACD']) or pd.isna(curr['MACD_Signal'])):
-        if curr['MACD'] > curr['MACD_Signal']:
-            signals['MACD'] = 1
-        elif curr['MACD'] < curr['MACD_Signal']:
-            signals['MACD'] = -1
-        else:
-            signals['MACD'] = 0
+        signals['MACD'] = 1 if curr['MACD'] > curr['MACD_Signal'] else (-1 if curr['MACD'] < curr['MACD_Signal'] else 0)
 
-    # 3. SMA Cross
     if not (pd.isna(curr['SMA20']) or pd.isna(curr['SMA60'])):
-        if curr['SMA20'] > curr['SMA60']:
-            signals['SMA_Cross'] = 1
-        elif curr['SMA20'] < curr['SMA60']:
-            signals['SMA_Cross'] = -1
-        else:
-            signals['SMA_Cross'] = 0
+        signals['SMA_Cross'] = 1 if curr['SMA20'] > curr['SMA60'] else (-1 if curr['SMA20'] < curr['SMA60'] else 0)
 
-    # 4. Stochastic
     if not (pd.isna(curr['Stoch_K']) or pd.isna(curr['Stoch_D'])):
         if curr['Stoch_K'] > curr['Stoch_D'] and curr['Stoch_K'] < 80:
             signals['Stochastic'] = 1
@@ -188,41 +165,17 @@ def build_signal_row(ind_df, idx_pos):
         else:
             signals['Stochastic'] = 0
 
-    # 5. Bollinger
     if not (pd.isna(curr['BB_Lower']) or pd.isna(curr['BB_Upper']) or pd.isna(curr['SMA20'])):
-        if curr['Close'] < curr['SMA20']:
-            signals['Bollinger'] = 1
-        elif curr['Close'] > curr['BB_Upper']:
-            signals['Bollinger'] = -1
-        else:
-            signals['Bollinger'] = 0
+        signals['Bollinger'] = 1 if curr['Close'] < curr['SMA20'] else (-1 if curr['Close'] > curr['BB_Upper'] else 0)
 
-    # 6. CCI
     if not pd.isna(curr['CCI']):
-        if curr['CCI'] < -50:
-            signals['CCI'] = 1
-        elif curr['CCI'] > 50:
-            signals['CCI'] = -1
-        else:
-            signals['CCI'] = 0
+        signals['CCI'] = 1 if curr['CCI'] < -50 else (-1 if curr['CCI'] > 50 else 0)
 
-    # 7. Williams %R
     if not pd.isna(curr['Williams_R']):
-        if curr['Williams_R'] < -50:
-            signals['Williams_R'] = 1
-        elif curr['Williams_R'] > -20:
-            signals['Williams_R'] = -1
-        else:
-            signals['Williams_R'] = 0
+        signals['Williams_R'] = 1 if curr['Williams_R'] < -50 else (-1 if curr['Williams_R'] > -20 else 0)
 
-    # 8. PSAR
     if not pd.isna(curr['PSAR']):
-        if curr['Close'] > curr['PSAR']:
-            signals['PSAR'] = 1
-        elif curr['Close'] < curr['PSAR']:
-            signals['PSAR'] = -1
-        else:
-            signals['PSAR'] = 0
+        signals['PSAR'] = 1 if curr['Close'] > curr['PSAR'] else (-1 if curr['Close'] < curr['PSAR'] else 0)
 
     return signals, curr['Close'], curr['SMA20'], curr['SMA60']
 
@@ -248,9 +201,9 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트 (마우스 스크롤 줌 및 드래그 팬 활성화)
+# 3. 대화형 차트 (시그널 겹침 방지 및 마커 스케일 최적화 반영)
 # -----------------------------------------------------------------------------
-def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True):
+def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True, cooldown_bars=3, marker_size=7):
     if df.empty:
         return go.Figure()
 
@@ -286,25 +239,34 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=1, col=1, secondary_y=False
         )
 
-    # 과거 패턴 기반 상승/하락 예상 시점 예측 마커
+    # 마커 중복 방지 로직 (Cooldown 적용)
     if show_signals:
         buy_x, buy_y = [], []
         sell_x, sell_y = [], []
+        
+        last_buy_idx = -cooldown_bars
+        last_sell_idx = -cooldown_bars
 
         for i in range(1, len(df)):
+            # MACD 크로스
             macd_gold = (df['MACD'].iloc[i - 1] < df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] >= df['MACD_Signal'].iloc[i])
             macd_dead = (df['MACD'].iloc[i - 1] > df['MACD_Signal'].iloc[i - 1]) and (df['MACD'].iloc[i] <= df['MACD_Signal'].iloc[i])
 
-            rsi_buy = (df['RSI'].iloc[i - 1] <= 35) and (df['RSI'].iloc[i] > 35)
-            rsi_sell = (df['RSI'].iloc[i - 1] >= 65) and (df['RSI'].iloc[i] < 65)
+            # RSI 반등/하락
+            rsi_buy = (df['RSI'].iloc[i - 1] <= 30) and (df['RSI'].iloc[i] > 30)
+            rsi_sell = (df['RSI'].iloc[i - 1] >= 70) and (df['RSI'].iloc[i] < 70)
 
-            if macd_gold or rsi_buy:
+            # 매수 시그널 필터링
+            if (macd_gold or rsi_buy) and (i - last_buy_idx >= cooldown_bars):
                 buy_x.append(df.index[i])
-                buy_y.append(df['Low'].iloc[i] * 0.985)
+                buy_y.append(df['Low'].iloc[i] * 0.975)  # 캔들과 여유 간격 확보
+                last_buy_idx = i
 
-            if macd_dead or rsi_sell:
+            # 매도 시그널 필터링
+            if (macd_dead or rsi_sell) and (i - last_sell_idx >= cooldown_bars):
                 sell_x.append(df.index[i])
-                sell_y.append(df['High'].iloc[i] * 1.015)
+                sell_y.append(df['High'].iloc[i] * 1.025)  # 캔들과 여유 간격 확보
+                last_sell_idx = i
 
         if buy_x:
             fig.add_trace(
@@ -312,7 +274,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
                     x=buy_x, y=buy_y,
                     mode="markers",
                     name="상승예상 (▲)",
-                    marker=dict(symbol="triangle-up", size=10, color="#00e676"),
+                    marker=dict(symbol="triangle-up", size=marker_size, color="#00e676"),
                     showlegend=True
                 ),
                 row=1, col=1
@@ -324,7 +286,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
                     x=sell_x, y=sell_y,
                     mode="markers",
                     name="하락예상 (▼)",
-                    marker=dict(symbol="triangle-down", size=10, color="#ff1744"),
+                    marker=dict(symbol="triangle-down", size=marker_size, color="#ff1744"),
                     showlegend=True
                 ),
                 row=1, col=1
@@ -344,13 +306,13 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
     # 목표가 / 손절가
     if target_price:
         fig.add_hline(
-            y=target_price, line_dash="dash", line_color="#00e676", line_width=2,
+            y=target_price, line_dash="dash", line_color="#00e676", line_width=1.5,
             annotation_text=f"🎯 목표가 ({target_price:,.1f})",
             annotation_position="top right", row=1, col=1
         )
     if stop_loss:
         fig.add_hline(
-            y=stop_loss, line_dash="dash", line_color="#ff1744", line_width=2,
+            y=stop_loss, line_dash="dash", line_color="#ff1744", line_width=1.5,
             annotation_text=f"🛑 손절가 ({stop_loss:,.1f})",
             annotation_position="bottom right", row=1, col=1
         )
@@ -380,9 +342,8 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=3, col=1
         )
 
-    # 마우스 줌/팬 인터랙션 강화 설정
     fig.update_layout(
-        title=f"📊 {ticker_symbol} ({interval_label}) 기술적 분석 및 추세 예측 차트",
+        title=f"📊 {ticker_symbol} ({interval_label}) 기술적 분석 차트",
         height=800,
         margin=dict(l=10, r=10, t=50, b=10),
         template="plotly_dark",
@@ -397,14 +358,14 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         gridcolor="#2a2e39",
         zerolinecolor="#2a2e39",
         rangeslider_visible=True,
-        rangeslider_thickness=0.06,
+        rangeslider_thickness=0.05,
         rangeselector=dict(
             buttons=list([
                 dict(count=1, label="1개월", step="month", stepmode="backward"),
                 dict(count=3, label="3개월", step="month", stepmode="backward"),
                 dict(count=6, label="6개월", step="month", stepmode="backward"),
                 dict(count=1, label="YTD", step="year", stepmode="todate"),
-                dict(step="all", label="전체/오늘(리셋)")
+                dict(step="all", label="전체")
             ]),
             bgcolor="#2a2e39", activecolor="#26a69a",
             font=dict(color="#ffffff", size=11), x=0, y=1.12
@@ -437,7 +398,6 @@ def main():
     if input_ticker != st.session_state.active_ticker:
         st.session_state.active_ticker = input_ticker
 
-    # 봉 주기 옵션 추가 (일봉 / 4시간봉)
     interval_type = st.sidebar.radio(
         "차트 봉 주기 (Interval)",
         options=["일봉 (1D)", "4시간봉 (4H)"],
@@ -452,7 +412,13 @@ def main():
         index=3
     )
 
-    toggle_signals = st.sidebar.toggle("상승/하락 예상 시점 마커 표시", value=True)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎯 마커 시그널 설정")
+    toggle_signals = st.sidebar.toggle("상승/하락 마커 표시", value=True)
+    
+    # 중복 시그널 방지용 쿨다운 및 마커 크기 슬라이더
+    cooldown_val = st.sidebar.slider("시그널 발생 최소 간격 (봉 개수)", min_value=1, max_value=10, value=4)
+    marker_size_val = st.sidebar.slider("마커 크기", min_value=4, max_value=12, value=7)
 
     current_ticker = st.session_state.active_ticker
     is_krx = current_ticker.endswith(".KS") or current_ticker.endswith(".KQ")
@@ -468,7 +434,7 @@ def main():
     # TAB 1: 대화형 차트
     with main_tab1:
         if ind_df.empty:
-            st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다. (4시간봉 데이터의 경우 최대 2년 조회 제한이 있습니다)")
+            st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다.")
         else:
             latest = ind_df.iloc[-1]
             prev = ind_df.iloc[-2]
@@ -492,7 +458,9 @@ def main():
                 interval_label="4시간봉" if interval_code == "4h" else "일봉",
                 target_price=target_p, 
                 stop_loss=stop_l, 
-                show_signals=toggle_signals
+                show_signals=toggle_signals,
+                cooldown_bars=cooldown_val,
+                marker_size=marker_size_val
             )
 
             st.plotly_chart(
