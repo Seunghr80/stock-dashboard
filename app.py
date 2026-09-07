@@ -201,9 +201,9 @@ def _set_active_ticker(ticker_name):
 
 
 # -----------------------------------------------------------------------------
-# 3. 대화형 차트 (초기 한 화면 봉 개수 20개로 확대)
+# 3. 대화형 차트 (적절한 초기 가로 간격 70개 봉 설정)
 # -----------------------------------------------------------------------------
-def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True, cooldown_bars=4, marker_size=7, visible_bars=20):
+def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True, cooldown_bars=4, marker_size=7, visible_bars=70):
     if df.empty:
         return go.Figure()
 
@@ -338,7 +338,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=3, col=1
         )
 
-    # 가로축(X축) 범위 설정: 기본 20개 봉으로 축소하여 널찍하게 표시
+    # 가로축(X축) 범위 설정: 적당히 적절한 70개 봉 기준으로 표시
     if len(df) > visible_bars:
         x_min = df.index[-visible_bars]
         x_max = df.index[-1]
@@ -348,7 +348,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
 
     fig.update_layout(
         title=f"📊 {ticker_symbol} ({interval_label}) 기술적 분석 차트",
-        height=950,
+        height=900,
         margin=dict(l=10, r=10, t=50, b=10),
         template="plotly_dark",
         paper_bgcolor="#131722",
@@ -358,7 +358,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    # X축 범위 및 스크롤바 설정
+    # X축 범위 설정
     fig.update_xaxes(
         gridcolor="#2a2e39",
         zerolinecolor="#2a2e39",
@@ -411,11 +411,11 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("📐 차트 가시성 & 시그널 설정")
     
-    # 기본값을 20으로 축소
-    visible_bars_val = st.sidebar.slider("한 화면에 볼 봉 개수 (가로 간격)", min_value=10, max_value=60, value=20, step=5)
+    # 적절한 가로 간격을 맞출 수 있도록 기본값 70 설정 (30~120 조절 범위)
+    visible_bars_val = st.sidebar.slider("한 화면에 볼 봉 개수 (가로 간격)", min_value=30, max_value=120, value=70, step=5)
     
     toggle_signals = st.sidebar.toggle("상승/하락 마커 표시", value=True)
-    cooldown_val = st.sidebar.slider("시그널 발생 최소 간격 (봉 개수)", min_value=1, max_value=15, value=5)
+    cooldown_val = st.sidebar.slider("시그널 발생 최소 간격 (봉 개수)", min_value=1, max_value=15, value=4)
     marker_size_val = st.sidebar.slider("마커 크기", min_value=4, max_value=12, value=7)
 
     current_ticker = st.session_state.active_ticker
