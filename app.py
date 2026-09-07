@@ -25,6 +25,21 @@ DEFAULT_WEIGHTS = {
 # (build_signal_row/run_backtest는 이 전역 딕셔너리를 실행 시점에 조회한다)
 INDICATOR_WEIGHTS = dict(DEFAULT_WEIGHTS)
  
+ 
+def format_price(v, is_krw=False):
+    """주식/코인 가격 표시용 포맷터. 코인은 $1 미만 종목이 흔해서 소수점 자리를 자동으로 늘린다."""
+    if v is None or pd.isna(v):
+        return "산출 불가"
+    if is_krw:
+        return f"{v:,.0f}원"
+    v = float(v)
+    if abs(v) >= 1:
+        return f"${v:,.2f}"
+    elif abs(v) >= 0.01:
+        return f"${v:.4f}"
+    else:
+        return f"${v:.6f}"
+ 
 # ---------------------------------------------------------
 # 1. 데이터 수집 및 캐싱
 # ---------------------------------------------------------
@@ -395,7 +410,7 @@ def run_backtest(ind, hold_days=5, threshold_ratio=0.7):
 # 7. 메인 UI 및 화면 구성 (Session State로 결과 유지)
 # ---------------------------------------------------------
 st.title("🎯 10대 지표 컨센서스 타점 분석기 Pro")
-st.caption("가중 지표 컨센서스, PSAR 정밀 계산, 차트 타점 마커 및 백테스트 리스크 지표가 통합된 전문 대시보드입니다.")
+st.caption("가중 지표 컨센서스, PSAR 정밀 계산, 차트 타점 마커 및 백테스트 리스크 지표가 통합된 전문 대시보드입니다. 주식뿐 아니라 BTC-USD, ETH-USD 같은 암호화폐 티커도 지원합니다.")
  
 # 사이드바: 사용자가 지표별 가중치 직접 조절
 st.sidebar.header("⚙️ 지표별 가중치 설정")
@@ -409,7 +424,7 @@ if "ticker" not in st.session_state:
  
 col_input, col_btn = st.columns([4, 1])
 with col_input:
-    input_ticker = st.text_input("종목 티커 입력 (예: TSLA, 005930.KS)", st.session_state.ticker)
+    input_ticker = st.text_input("종목 티커 입력 (예: TSLA, 005930.KS, BTC-USD, ETH-USD)", st.session_state.ticker)
 with col_btn:
     st.write(" ")
     st.write(" ")
@@ -448,7 +463,7 @@ if st.session_state.analyzed:
             sell_ratio = (weighted_sell / total_weight) * 100
  
             col1, col2, col3 = st.columns(3)
-            price_display = f"{current_price:,.0f}원" if is_krw else f"${current_price:.2f}"
+            price_display = format_price(current_price, is_krw)
             col1.metric("현재가", price_display)
             col2.metric("가중 매수 비율", f"{buy_ratio:.0f}%")
             col3.metric("가중 매도 비율", f"{sell_ratio:.0f}%")
@@ -461,9 +476,7 @@ if st.session_state.analyzed:
             support_price = current_price - (atr14 * 2) if not pd.isna(atr14) else None
  
             def fmt(v):
-                if v is None or pd.isna(v):
-                    return "산출 불가"
-                return f"{v:,.0f}원" if is_krw else f"${v:.2f}"
+                return format_price(v, is_krw)
  
             # 탭 분리 전에 기본값(5일 보유)으로 백테스트를 먼저 실행해 차트 마커(buy_signals_dates)를
             # 확보한다. 탭2의 슬라이더를 조작해도 탭1 차트의 마커는 이 기본값 기준으로 안정적으로 유지된다.
@@ -531,7 +544,7 @@ if st.session_state.analyzed:
                 if "scan_results" not in st.session_state:
                     st.session_state.scan_results = None  # None = 아직 스캔 전
  
-                watchlist_input = st.text_area("티커 목록 (쉼표로 구분)", "TSLA, NVDA, AAPL, MSFT, 005930.KS")
+                watchlist_input = st.text_area("티커 목록 (쉼표로 구분)", "TSLA, NVDA, AAPL, MSFT, 005930.KS, BTC-USD, ETH-USD")
                 if st.button("멀티 스캔 실행", use_container_width=True):
                     tickers = [t.strip().upper() for t in watchlist_input.split(",") if t.strip()]
                     scan_results = []
@@ -559,7 +572,7 @@ if st.session_state.analyzed:
  
                             scan_results.append({
                                 "티커": t_sym,
-                                "현재가": f"{t_close:,.0f}원" if (t_sym.endswith(".KS") or t_sym.endswith(".KQ")) else f"${t_close:.2f}",
+                                "현재가": format_price(t_close, t_sym.endswith(".KS") or t_sym.endswith(".KQ")),
                                 "가중 매수 강도 (%)": ratio_display,
                                 "상태": status,
                             })
