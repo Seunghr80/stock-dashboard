@@ -32,10 +32,14 @@ INDICATOR_WEIGHTS = {
 # 2. 데이터 수집 및 정교한 지표 계산
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
-def fetch_stock_data(ticker_symbol, period="1y"):
-    """yfinance 시세 데이터 수집"""
+def fetch_stock_data(ticker_symbol, interval="1d", period="1y"):
+    """
+    yfinance 시세 데이터 수집
+    interval: '1d' (일봉), '4h' (4시간봉)
+    """
     try:
-        df = yf.download(ticker_symbol, period=period, progress=False)
+        # 4시간 봉의 경우 yfinance 최대 조회 기간은 약 730일(2년)입니다.
+        df = yf.download(ticker_symbol, period=period, interval=interval, progress=False)
         if df.empty:
             return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):
@@ -223,8 +227,8 @@ def build_signal_row(ind_df, idx_pos):
     return signals, curr['Close'], curr['SMA20'], curr['SMA60']
 
 
-def get_indicator_series(ticker_symbol, period="1y"):
-    df = fetch_stock_data(ticker_symbol, period)
+def get_indicator_series(ticker_symbol, interval="1d", period="1y"):
+    df = fetch_stock_data(ticker_symbol, interval=interval, period=period)
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
     ind_df = calculate_technical_indicators(df)
@@ -246,7 +250,7 @@ def _set_active_ticker(ticker_name):
 # -----------------------------------------------------------------------------
 # 3. 대화형 차트 (마우스 스크롤 줌 및 드래그 팬 활성화)
 # -----------------------------------------------------------------------------
-def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=None, show_signals=True):
+def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_price=None, stop_loss=None, show_signals=True):
     if df.empty:
         return go.Figure()
 
@@ -378,14 +382,14 @@ def create_interactive_chart(df, ticker_symbol, target_price=None, stop_loss=Non
 
     # 마우스 줌/팬 인터랙션 강화 설정
     fig.update_layout(
-        title=f"📊 {ticker_symbol} 기술적 분석 및 추세 예측 차트 (마우스 스크롤 확대/축소 가능)",
+        title=f"📊 {ticker_symbol} ({interval_label}) 기술적 분석 및 추세 예측 차트",
         height=800,
         margin=dict(l=10, r=10, t=50, b=10),
         template="plotly_dark",
         paper_bgcolor="#131722",
         plot_bgcolor="#131722",
         hovermode="x unified",
-        dragmode="pan",  # 기본 드래그 동작을 이동(Pan)으로 설정
+        dragmode="pan",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
@@ -433,10 +437,19 @@ def main():
     if input_ticker != st.session_state.active_ticker:
         st.session_state.active_ticker = input_ticker
 
+    # 봉 주기 옵션 추가 (일봉 / 4시간봉)
+    interval_type = st.sidebar.radio(
+        "차트 봉 주기 (Interval)",
+        options=["일봉 (1D)", "4시간봉 (4H)"],
+        index=0,
+        horizontal=True
+    )
+    interval_code = "1d" if "일봉" in interval_type else "4h"
+
     selected_period = st.sidebar.selectbox(
         "데이터 조회 기간",
-        options=["3m", "6m", "1y", "2y", "5y"],
-        index=2
+        options=["1m", "3m", "6m", "1y", "2y", "5y"],
+        index=3
     )
 
     toggle_signals = st.sidebar.toggle("상승/하락 예상 시점 마커 표시", value=True)
@@ -444,7 +457,7 @@ def main():
     current_ticker = st.session_state.active_ticker
     is_krx = current_ticker.endswith(".KS") or current_ticker.endswith(".KQ")
 
-    raw_df, ind_df = get_indicator_series(current_ticker, period=selected_period)
+    raw_df, ind_df = get_indicator_series(current_ticker, interval=interval_code, period=selected_period)
 
     main_tab1, main_tab2, main_tab3 = st.tabs([
         "📊 대화형 차트 & 추세 예측",
@@ -455,7 +468,7 @@ def main():
     # TAB 1: 대화형 차트
     with main_tab1:
         if ind_df.empty:
-            st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다.")
+            st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다. (4시간봉 데이터의 경우 최대 2년 조회 제한이 있습니다)")
         else:
             latest = ind_df.iloc[-1]
             prev = ind_df.iloc[-2]
@@ -474,10 +487,14 @@ def main():
             col5.metric("CCI (20)", f"{latest['CCI']:.1f}" if not pd.isna(latest['CCI']) else "-")
 
             chart_fig = create_interactive_chart(
-                ind_df, current_ticker, target_price=target_p, stop_loss=stop_l, show_signals=toggle_signals
+                ind_df, 
+                current_ticker, 
+                interval_label="4시간봉" if interval_code == "4h" else "일봉",
+                target_price=target_p, 
+                stop_loss=stop_l, 
+                show_signals=toggle_signals
             )
 
-            # config 옵션에 scrollZoom=True를 추가하여 마우스 휠 확대를 활성화
             st.plotly_chart(
                 chart_fig,
                 use_container_width=True,
@@ -489,7 +506,7 @@ def main():
         if ind_df.empty or len(ind_df) < MIN_ROWS_REQUIRED:
             st.warning("분석에 필요한 충분한 데이터가 없습니다.")
         else:
-            st.subheader(f"🔍 {current_ticker} 8대 기술적 지표 종합 판정")
+            st.subheader(f"🔍 {current_ticker} ({'4시간봉' if interval_code == '4h' else '일봉'}) 8대 기술적 지표 종합 판정")
             signals, cur_close, cur_sma20, cur_sma60 = build_signal_row(ind_df, len(ind_df) - 1)
 
             w_buy, w_total = 0.0, 0.0
@@ -534,7 +551,7 @@ def main():
             scan_results = []
             progress_bar = st.progress(0)
             for idx, t_sym in enumerate(tickers):
-                t_df, t_ind = get_indicator_series(t_sym)
+                t_df, t_ind = get_indicator_series(t_sym, interval=interval_code, period=selected_period)
                 if not t_df.empty and len(t_ind) >= MIN_ROWS_REQUIRED:
                     t_sigs, t_close, _, _ = build_signal_row(t_ind, len(t_ind) - 1)
                     w_buy, w_total = 0.0, 0.0
