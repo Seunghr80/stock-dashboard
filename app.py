@@ -28,19 +28,41 @@ INDICATOR_WEIGHTS = {
     "PSAR": 1.0
 }
 
+# yfinance가 지원하지 않는 4h 인터벌을 60m 수집 후 리샘플링
+_RESAMPLE_RULES = {"4h": ("60m", "4h")}
+
+
 # -----------------------------------------------------------------------------
 # 2. 데이터 수집 및 정교한 지표 계산
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_stock_data(ticker_symbol, interval="1d", period="1y"):
-    """yfinance 시세 데이터 수집"""
+    """yfinance 시세 데이터 수집 및 1차원 데이터 규격화"""
     try:
-        df = yf.download(ticker_symbol, period=period, interval=interval, progress=False)
+        fetch_interval = interval
+        resample_to = None
+        if interval in _RESAMPLE_RULES:
+            fetch_interval, resample_to = _RESAMPLE_RULES[interval]
+            if period in ("5y",):
+                period = "2y"
+
+        df = yf.download(ticker_symbol, period=period, interval=fetch_interval, progress=False)
         if df.empty:
             return pd.DataFrame()
+
+        # MultiIndex 컬럼 단일화
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df = df.dropna()
+
+        # 각 컬럼을 확실히 1차원 Series 형태로 정렬
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        df = df[[c for c in cols if c in df.columns]].dropna()
+
+        if resample_to and not df.empty:
+            df = df.resample(resample_to).agg({
+                "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
+            }).dropna()
+
         return df
     except Exception:
         return pd.DataFrame()
@@ -53,55 +75,60 @@ def calculate_technical_indicators(df):
 
     ind_df = df.copy()
 
+    # Series 타입 보장
+    close_s = ind_df['Close'].squeeze()
+    high_s = ind_df['High'].squeeze()
+    low_s = ind_df['Low'].squeeze()
+
     # 1. 이동평균선 (SMA 20, 60)
-    ind_df['SMA20'] = ind_df['Close'].rolling(window=20).mean()
-    ind_df['SMA60'] = ind_df['Close'].rolling(window=60).mean()
+    ind_df['SMA20'] = close_s.rolling(window=20).mean()
+    ind_df['SMA60'] = close_s.rolling(window=60).mean()
 
     # 2. RSI (14)
-    delta = ind_df['Close'].diff()
+    delta = close_s.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss.replace(0, np.nan)
     ind_df['RSI'] = 100 - (100 / (1 + rs))
 
     # 3. MACD
-    ema12 = ind_df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = ind_df['Close'].ewm(span=26, adjust=False).mean()
+    ema12 = close_s.ewm(span=12, adjust=False).mean()
+    ema26 = close_s.ewm(span=26, adjust=False).mean()
     ind_df['MACD'] = ema12 - ema26
     ind_df['MACD_Signal'] = ind_df['MACD'].ewm(span=9, adjust=False).mean()
     ind_df['MACD_Hist'] = ind_df['MACD'] - ind_df['MACD_Signal']
 
     # 4. 스토캐스틱 (%K, %D)
-    low14 = ind_df['Low'].rolling(window=14).min()
-    high14 = ind_df['High'].rolling(window=14).max()
-    ind_df['Stoch_K'] = (ind_df['Close'] - low14) / (high14 - low14).replace(0, np.nan) * 100
+    low14 = low_s.rolling(window=14).min()
+    high14 = high_s.rolling(window=14).max()
+    ind_df['Stoch_K'] = (close_s - low14) / (high14 - low14).replace(0, np.nan) * 100
     ind_df['Stoch_D'] = ind_df['Stoch_K'].rolling(window=3).mean()
 
     # 5. 볼린저 밴드
-    std20 = ind_df['Close'].rolling(window=20).std()
+    std20 = close_s.rolling(window=20).std()
     ind_df['BB_Upper'] = ind_df['SMA20'] + (std20 * 2)
     ind_df['BB_Lower'] = ind_df['SMA20'] - (std20 * 2)
 
     # 6. CCI (20)
-    tp = (ind_df['High'] + ind_df['Low'] + ind_df['Close']) / 3
+    tp = (high_s + low_s + close_s) / 3
     sma_tp = tp.rolling(window=20).mean()
     mad = tp.rolling(window=20).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
     ind_df['CCI'] = (tp - sma_tp) / (0.015 * mad.replace(0, np.nan))
 
     # 7. Williams %R (14)
-    ind_df['Williams_R'] = ((high14 - ind_df['Close']) / (high14 - low14).replace(0, np.nan)) * -100
+    ind_df['Williams_R'] = ((high14 - close_s) / (high14 - low14).replace(0, np.nan)) * -100
 
     # 8. ATR (변동성)
-    tr1 = ind_df['High'] - ind_df['Low']
-    tr2 = (ind_df['High'] - ind_df['Close'].shift(1)).abs()
-    tr3 = (ind_df['Low'] - ind_df['Close'].shift(1)).abs()
+    tr1 = high_s - low_s
+    tr2 = (high_s - close_s.shift(1)).abs()
+    tr3 = (low_s - close_s.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     ind_df['ATR'] = tr.rolling(window=14).mean()
 
     # 9. Parabolic SAR
-    highs = ind_df['High'].values
-    lows = ind_df['Low'].values
-    closes = ind_df['Close'].values
+    highs = high_s.values
+    lows = low_s.values
+    closes = close_s.values
     psar = closes.copy()
     af = 0.02
     max_af = 0.2
@@ -165,8 +192,8 @@ def build_signal_row(ind_df, idx_pos):
         else:
             signals['Stochastic'] = 0
 
-    if not (pd.isna(curr['BB_Lower']) or pd.isna(curr['BB_Upper']) or pd.isna(curr['SMA20'])):
-        signals['Bollinger'] = 1 if curr['Close'] < curr['SMA20'] else (-1 if curr['Close'] > curr['BB_Upper'] else 0)
+    if not (pd.isna(curr['BB_Lower']) or pd.isna(curr['BB_Upper'])):
+        signals['Bollinger'] = 1 if curr['Close'] < curr['BB_Lower'] else (-1 if curr['Close'] > curr['BB_Upper'] else 0)
 
     if not pd.isna(curr['CCI']):
         signals['CCI'] = 1 if curr['CCI'] < -50 else (-1 if curr['CCI'] > 50 else 0)
@@ -239,11 +266,11 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=1, col=1, secondary_y=False
         )
 
-    # 중복 시그널 방지 로직
+    # 시그널 표출 로직
     if show_signals:
         buy_x, buy_y = [], []
         sell_x, sell_y = [], []
-        
+
         last_buy_idx = -cooldown_bars
         last_sell_idx = -cooldown_bars
 
@@ -338,7 +365,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
             row=3, col=1
         )
 
-    # 📌 [가로축/세로축 동적 스케일링 핵심 부분]
+    # 📌 동적 화면 스케일링 설정
     if len(df) > visible_bars:
         visible_df = df.iloc[-visible_bars:]
         x_min = visible_df.index[0]
@@ -348,24 +375,21 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         x_min = df.index[0]
         x_max = df.index[-1]
 
-    # 현재 화면 봉들의 최저가/최고가 기준으로 Y축 범위 계산 (세로 확장)
     y_min = visible_df['Low'].min()
     y_max = visible_df['High'].max()
-    
-    # 60일 이평선이나 20일 이평선이 화면 안에서 잘리지 않도록 고려
+
     if 'SMA20' in visible_df.columns:
         sma_min = visible_df['SMA20'].min()
         sma_max = visible_df['SMA20'].max()
         if not pd.isna(sma_min): y_min = min(y_min, sma_min)
         if not pd.isna(sma_max): y_max = max(y_max, sma_max)
-        
+
     if 'SMA60' in visible_df.columns:
         sma_min = visible_df['SMA60'].min()
         sma_max = visible_df['SMA60'].max()
         if not pd.isna(sma_min): y_min = min(y_min, sma_min)
         if not pd.isna(sma_max): y_max = max(y_max, sma_max)
 
-    # 상하 3% 여백 부여
     y_padding = (y_max - y_min) * 0.03 if (y_max - y_min) > 0 else y_min * 0.03
     y_range = [y_min - y_padding, y_max + y_padding]
 
@@ -381,7 +405,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    # X축 범위 설정
+    # X축 설정
     fig.update_xaxes(
         gridcolor="#2a2e39",
         zerolinecolor="#2a2e39",
@@ -391,7 +415,7 @@ def create_interactive_chart(df, ticker_symbol, interval_label="일봉", target_
         type="date"
     )
 
-    # Y축 범위를 화면에 보이는 최저/최고가에 맞춰 꽉 채움
+    # Y축 범위를 현재 보이는 영역 최저/최고가에 맞춤
     fig.update_yaxes(gridcolor="#2a2e39", zerolinecolor="#2a2e39", range=y_range, fixedrange=False, row=1, col=1)
     fig.update_yaxes(showgrid=False, secondary_y=True, row=1, col=1)
     fig.update_yaxes(gridcolor="#2a2e39", range=[0, 100], row=2, col=1)
@@ -431,13 +455,13 @@ def main():
         options=["1m", "3m", "6m", "1y", "2y", "5y"],
         index=3
     )
+    if interval_code == "4h" and selected_period == "5y":
+        st.sidebar.caption("※ 4시간봉은 야후 파이낸스 정책상 최대 2년치까지만 제공되어, 2년으로 자동 조정됩니다.")
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("📐 차트 가시성 & 시그널 설정")
-    
-    # 적절한 가로 간격을 맞출 수 있도록 기본값 70 설정
+
     visible_bars_val = st.sidebar.slider("한 화면에 볼 봉 개수 (가로 간격)", min_value=30, max_value=120, value=70, step=5)
-    
     toggle_signals = st.sidebar.toggle("상승/하락 마커 표시", value=True)
     cooldown_val = st.sidebar.slider("시그널 발생 최소 간격 (봉 개수)", min_value=1, max_value=15, value=4)
     marker_size_val = st.sidebar.slider("마커 크기", min_value=4, max_value=12, value=7)
@@ -456,7 +480,7 @@ def main():
     # TAB 1: 대화형 차트
     with main_tab1:
         if ind_df.empty:
-            st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다.")
+            st.error(f"'{current_ticker}'의 시세 데이터를 불러올 수 없거나 데이터가 부족합니다. 티커명을 확인해 주세요.")
         else:
             latest = ind_df.iloc[-1]
             prev = ind_df.iloc[-2]
@@ -475,11 +499,11 @@ def main():
             col5.metric("CCI (20)", f"{latest['CCI']:.1f}" if not pd.isna(latest['CCI']) else "-")
 
             chart_fig = create_interactive_chart(
-                ind_df, 
-                current_ticker, 
+                ind_df,
+                current_ticker,
                 interval_label="4시간봉" if interval_code == "4h" else "일봉",
-                target_price=target_p, 
-                stop_loss=stop_l, 
+                target_price=target_p,
+                stop_loss=stop_l,
                 show_signals=toggle_signals,
                 cooldown_bars=cooldown_val,
                 marker_size=marker_size_val,
@@ -566,6 +590,13 @@ def main():
                         "현재가": format_price(t_close, t_sym.endswith(".KS") or t_sym.endswith(".KQ")),
                         "가중 매수 강도 (%)": ratio_display,
                         "상태": status,
+                    })
+                else:
+                    scan_results.append({
+                        "티커": t_sym,
+                        "현재가": "-",
+                        "가중 매수 강도 (%)": np.nan,
+                        "상태": "⚪ 데이터 오류",
                     })
                 progress_bar.progress((idx + 1) / len(tickers))
 
